@@ -1,0 +1,50 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17-alpine
+        env:
+          POSTGRES_USER: cardops
+          POSTGRES_PASSWORD: cardops
+          POSTGRES_DB: cardops
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U cardops -d cardops"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+      redis:
+        image: redis:7-alpine
+        ports:
+          - 6379:6379
+        options: >-
+          --health-cmd "redis-cli ping"
+          --health-interval 3s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      TEST_DATABASE_URL: postgres://cardops:cardops@localhost:5432/cardops
+      TEST_REDIS_URL: redis://localhost:6379
+      SKIP_LOCAL_DB: '1'
+      JWT_SECRET: ci-only-cardops-jwt-secret-at-least-32-chars
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - run: npm ci --no-audit --no-fund
+      - run: npm run typecheck
+      - run: npm run build
+      - run: npm test

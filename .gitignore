@@ -1,0 +1,14 @@
+node_modules/
+dist/
+coverage/
+.data/
+.env
+.env.local
+.env.*.local
+*.log
+.DS_Store
+Thumbs.db
+.vscode/
+.idea/
+apps/web/.vite/
+apps/api/drizzle/meta/_journal.json.bak

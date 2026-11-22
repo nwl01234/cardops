@@ -1,0 +1,55 @@
+{
+  "name": "cardops",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "CardOps — внутренняя платформа учёта карт, склада и операций",
+  "workspaces": [
+    "apps/*",
+    "packages/*",
+    "services/*"
+  ],
+  "engines": {
+    "node": ">=22.11"
+  },
+  "allowScripts": {
+    "@embedded-postgres/windows-x64@17.9.0-beta.17": true,
+    "@embedded-postgres/linux-x64@17.9.0-beta.17": true,
+    "@embedded-postgres/linux-arm64@17.9.0-beta.17": true,
+    "@embedded-postgres/darwin-x64@17.9.0-beta.17": true,
+    "@embedded-postgres/darwin-arm64@17.9.0-beta.17": true,
+    "esbuild@0.18.20": true,
+    "esbuild@0.25.12": true,
+    "esbuild@0.28.2": true,
+    "tesseract.js@6.0.1": true
+  },
+  "scripts": {
+    "demo": "node scripts/dev.mjs",
+    "dev": "node scripts/dev.mjs",
+    "dev:api": "npm run dev --workspace @cardops/api",
+    "dev:web": "npm run dev --workspace @cardops/web",
+    "dev:notifications": "npm run dev --workspace @cardops/notifications",
+    "dev:scan": "npm run dev --workspace @cardops/scan",
+    "dev:worker": "npm run dev --workspace @cardops/outbox-worker",
+    "db:backup": "node scripts/backup.mjs",
+    "db:restore": "node scripts/restore.mjs",
+    "load:test": "node scripts/load-test.mjs",
+    "db:local": "node scripts/db.mjs",
+    "db:migrate": "npm run db:migrate --workspace @cardops/api",
+    "db:seed": "npm run db:seed --workspace @cardops/api",
+    "db:reset": "node scripts/reset-db.mjs",
+    "build": "npm run build --workspace @cardops/api && npm run build --workspace @cardops/web && npm run build --workspace @cardops/notifications && npm run build --workspace @cardops/scan && npm run build --workspace @cardops/outbox-worker",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "node scripts/test.mjs",
+    "test:only": "npm run test --workspace @cardops/api",
+    "test:web": "npm run test --workspace @cardops/web",
+    "format": "prettier --write .",
+    "format:check": "prettier --check ."
+  },
+  "devDependencies": {
+    "autocannon": "8.0.0",
+    "embedded-postgres": "17.9.0-beta.17",
+    "prettier": "3.8.1",
+    "typescript": "5.9.3"
+  }
+}

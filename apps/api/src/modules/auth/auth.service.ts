@@ -1,5 +1,5 @@
 import { randomBytes, randomUUID } from 'node:crypto';
-import { and, eq, isNull } from 'drizzle-orm';
+import { and, eq, isNull, sql } from 'drizzle-orm';
 import type { LoginInput, UserDto } from '@cardops/shared';
 import type { AppConfig } from '../../config/env';
 import type { Database } from '../../db/client';
@@ -10,7 +10,12 @@ import { burnPasswordCheck, verifyPassword } from '../../lib/password';
 import { findUserById, findUserByLogin, toUserDto } from '../users/users.repo';
 import type { SessionStore } from './session-store';
 import { signAccessToken } from './token';
-import { findRefreshToken, insertRefreshToken, revokeFamily } from './refresh.repo';
+import {
+  findRefreshToken,
+  insertRefreshToken,
+  revokeFamily,
+  revokeRefreshToken,
+} from './refresh.repo';
 
 export interface LoginMeta {
   ip: string;
@@ -68,8 +73,22 @@ export class AuthService {
 
     const nextRaw = randomBytes(48).toString('base64url');
     const nextHash = sha256(nextRaw);
+    const issuedAt = new Date();
 
-    await this.db.transaction(async (tx) => {
+    const nextId = await this.db.transaction(async (tx) => {
+      // Serialize rotation against admin revocation for the same user. If a
+      // revoke wins the lock, the re-read below sees revokedAt and refuses to
+      // resurrect the family.
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${existing.userId}))`);
+      const fresh = await tx
+        .select({ revokedAt: refreshTokens.revokedAt })
+        .from(refreshTokens)
+        .where(eq(refreshTokens.id, existing.id))
+        .for('update');
+      if (!fresh[0] || fresh[0].revokedAt) {
+        throw new AppError('UNAUTHORIZED', 'Refresh token was already used');
+      }
+
       const claimed = await tx
         .update(refreshTokens)
         .set({ revokedAt: new Date() })
@@ -87,6 +106,7 @@ export class AuthService {
         expiresAt: this.refreshExpiry(),
         userAgent: meta.userAgent,
         ip: meta.ip,
+        createdAt: issuedAt,
       });
       await tx
         .update(refreshTokens)
@@ -96,7 +116,14 @@ export class AuthService {
       return nextId;
     });
 
-    await this.sessions.create(existing.familyId, user.id, this.refreshTtlSeconds());
+    try {
+      await this.sessions.create(existing.familyId, user.id, this.refreshTtlSeconds(), issuedAt);
+    } catch (error) {
+      // Compensate a failed session write: otherwise the client has a rotated
+      // refresh token that has no live session.
+      await revokeRefreshToken(this.db, nextId).catch(() => undefined);
+      throw error;
+    }
     const accessToken = await signAccessToken(this.config, {
       sub: user.id,
       role: user.role,
@@ -122,10 +149,13 @@ export class AuthService {
   }
 
   async revokeUserSessions(userId: string): Promise<void> {
-    await this.db
-      .update(refreshTokens)
-      .set({ revokedAt: new Date() })
-      .where(eq(refreshTokens.userId, userId));
+    await this.db.transaction(async (tx) => {
+      await tx.execute(sql`select pg_advisory_xact_lock(hashtext(${userId}))`);
+      await tx
+        .update(refreshTokens)
+        .set({ revokedAt: new Date() })
+        .where(eq(refreshTokens.userId, userId));
+    });
     await this.sessions.revokeUser(userId);
   }
 
@@ -136,6 +166,7 @@ export class AuthService {
     const familyId = randomUUID();
     const rawToken = randomBytes(48).toString('base64url');
     const expiresAt = this.refreshExpiry();
+    const issuedAt = new Date();
 
     await insertRefreshToken(this.db, {
       userId: user.id,
@@ -144,8 +175,9 @@ export class AuthService {
       expiresAt,
       userAgent: meta.userAgent,
       ip: meta.ip,
+      createdAt: issuedAt,
     });
-    await this.sessions.create(familyId, user.id, this.refreshTtlSeconds());
+    await this.sessions.create(familyId, user.id, this.refreshTtlSeconds(), issuedAt);
 
     const accessToken = await signAccessToken(this.config, {
       sub: user.id,

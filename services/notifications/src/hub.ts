@@ -6,6 +6,7 @@ import { isVisible } from './visibility';
 interface Client {
   socket: WSContext;
   principal: RealtimePrincipal;
+  sid: string;
 }
 
 export class NotificationHub {
@@ -17,8 +18,8 @@ export class NotificationHub {
     return this.clients.size;
   }
 
-  attach(socket: WSContext, principal: RealtimePrincipal): void {
-    this.clients.set(socket, { socket, principal });
+  attach(socket: WSContext, principal: RealtimePrincipal, sid: string): void {
+    this.clients.set(socket, { socket, principal, sid });
     this.onConnectionChange(1);
     socket.send(JSON.stringify({ type: 'ready', at: new Date().toISOString() }));
   }
@@ -52,13 +53,28 @@ export class NotificationHub {
   closeUser(userId: string): void {
     for (const client of this.clients.values()) {
       if (client.principal.id !== userId) continue;
-      try {
-        client.socket.close(4401, 'session revoked');
-      } catch {
-        // Already closed by the peer.
-      }
-      this.clients.delete(client.socket);
+      this.closeClient(client);
     }
+  }
+
+  sessionIds(): string[] {
+    return [...new Set([...this.clients.values()].map((client) => client.sid))];
+  }
+
+  closeSession(sid: string): void {
+    for (const client of this.clients.values()) {
+      if (client.sid === sid) this.closeClient(client);
+    }
+  }
+
+  private closeClient(client: Client): void {
+    try {
+      client.socket.close(4401, 'session revoked');
+    } catch {
+      // Already closed by the peer.
+    }
+    this.clients.delete(client.socket);
+    this.onConnectionChange(-1);
   }
 
   closeAll(): void {

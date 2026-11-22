@@ -1,3 +1,4 @@
+import { sql } from 'drizzle-orm';
 import type {
   AdminCreateUserInput,
   AdminUpdateUserInput,
@@ -71,23 +72,34 @@ export class UsersService {
       current.role === 'admin' &&
       current.isActive &&
       ((input.role !== undefined && input.role !== 'admin') || input.isActive === false);
-    if (removesActiveAdmin && (await countActiveAdmins(this.db)) <= 1) {
-      throw new AppError('CONFLICT', 'At least one active admin must remain');
-    }
 
-    const updated = await updateUser(this.db, userId, {
+    const values = {
       ...(input.name === undefined ? {} : { name: input.name }),
       ...(input.password === undefined ? {} : { passwordHash: await hashPassword(input.password) }),
       ...(input.role === undefined ? {} : { role: input.role }),
       ...(input.warehouseId === undefined && input.role === undefined ? {} : { warehouseId }),
       ...(input.isActive === undefined ? {} : { isActive: input.isActive }),
-    });
+    };
+
+    // The last-admin invariant is a global one, so it must be checked and
+    // applied under one lock. A plain read-then-write lets two admins demote
+    // each other concurrently and leave the system with zero admins.
+    const updated = removesActiveAdmin
+      ? await this.db.transaction(async (tx) => {
+          await tx.execute(sql`select pg_advisory_xact_lock(hashtext('cardops:admins'))`);
+          if ((await countActiveAdmins(tx)) <= 1) {
+            throw new AppError('CONFLICT', 'At least one active admin must remain');
+          }
+          return updateUser(tx, userId, values);
+        })
+      : await updateUser(this.db, userId, values);
     if (!updated) throw AppError.notFound('User not found');
 
     if (
       input.password !== undefined ||
       input.isActive === false ||
-      (input.role !== undefined && input.role !== current.role)
+      (input.role !== undefined && input.role !== current.role) ||
+      warehouseId !== current.warehouseId
     ) {
       await this.auth.revokeUserSessions(userId);
     }

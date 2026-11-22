@@ -1,4 +1,4 @@
-import { and, count, desc, eq, inArray, isNull, lte, min, sql } from 'drizzle-orm';
+import { and, count, desc, eq, gte, inArray, isNotNull, isNull, lte, min, sql } from 'drizzle-orm';
 import type { OutboxStatsDto, RealtimeEvent } from '@cardops/shared';
 import type { Database, DbExecutor } from '../../db/client';
 import { outboxEvents } from '../../db/schema';
@@ -100,7 +100,13 @@ export async function getOutboxStats(db: Database): Promise<OutboxStatsDto> {
     db
       .select({ value: count() })
       .from(outboxEvents)
-      .where(and(isNull(outboxEvents.processedAt), sql`${outboxEvents.lastError} is not null`)),
+      .where(
+        and(
+          isNull(outboxEvents.processedAt),
+          isNotNull(outboxEvents.lastError),
+          gte(outboxEvents.attempts, 5),
+        ),
+      ),
     db
       .select({ value: min(outboxEvents.occurredAt) })
       .from(outboxEvents)

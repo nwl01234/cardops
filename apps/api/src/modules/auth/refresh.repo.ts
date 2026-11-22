@@ -20,6 +20,7 @@ export async function insertRefreshToken(
     expiresAt: Date;
     userAgent?: string | null;
     ip?: string | null;
+    createdAt?: Date;
   },
 ): Promise<string> {
   const rows = await db.insert(refreshTokens).values(values).returning({ id: refreshTokens.id });

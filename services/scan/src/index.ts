@@ -6,7 +6,7 @@ import Redis from 'ioredis';
 import { loadConfig } from './env';
 import { sniffImageType } from './image';
 import { createLogger } from './logger';
-import { disposeOcr, recognize } from './ocr';
+import { disposeOcr, OcrBusyError, OcrTimeoutError, recognize } from './ocr';
 
 const config = loadConfig();
 const logger = createLogger(config.LOG_LEVEL);
@@ -14,7 +14,7 @@ const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2 });
 
 interface AccessClaims {
   sub: string;
-  sid?: string;
+  sid: string;
 }
 
 async function authenticate(cookieHeader: string | undefined): Promise<AccessClaims | null> {
@@ -31,11 +31,9 @@ async function authenticate(cookieHeader: string | undefined): Promise<AccessCla
       algorithms: ['HS256'],
     });
     if (typeof payload.sub !== 'string') return null;
-    if (typeof payload.sid === 'string') {
-      const session = await redis.exists(`cardops:session:${payload.sid}`);
-      if (!session) return null;
-    }
-    return { sub: payload.sub, sid: typeof payload.sid === 'string' ? payload.sid : undefined };
+    if (typeof payload.sid !== 'string') return null;
+    if (!(await redis.exists(`cardops:session:${payload.sid}`))) return null;
+    return { sub: payload.sub, sid: payload.sid };
   } catch {
     return null;
   }
@@ -192,6 +190,19 @@ app.post(
         },
       });
     } catch (error) {
+      if (error instanceof OcrBusyError) {
+        c.header('Retry-After', '5');
+        return c.json(
+          { error: { code: 'OCR_BUSY', message: 'OCR queue is full; retry shortly' } },
+          503,
+        );
+      }
+      if (error instanceof OcrTimeoutError) {
+        return c.json(
+          { error: { code: 'OCR_TIMEOUT', message: 'OCR timed out; enter the code manually' } },
+          504,
+        );
+      }
       logger.error({ err: error }, 'OCR failed');
       return c.json(
         { error: { code: 'INTERNAL_ERROR', message: 'OCR failed; enter the code manually' } },

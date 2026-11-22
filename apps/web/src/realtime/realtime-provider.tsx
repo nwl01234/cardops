@@ -121,9 +121,14 @@ export function RealtimeProvider({ children }: { children: ReactNode }) {
         }
       });
 
-      socket.addEventListener('close', () => {
+      socket.addEventListener('close', (event) => {
         if (disposed) return;
         setStatus('closed');
+        if (event.code === 4401) {
+          // Session revoked or expired: reconnecting cannot help.
+          window.dispatchEvent(new Event('cardops:unauthorized'));
+          return;
+        }
         scheduleReconnect();
       });
 

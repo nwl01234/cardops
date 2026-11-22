@@ -25,6 +25,18 @@ const notificationsPort = Number(process.env.NOTIFICATIONS_PORT ?? 8790);
 const scanPort = Number(process.env.SCAN_PORT ?? 8791);
 const redisUrl = process.env.REDIS_URL ?? 'redis://127.0.0.1:6379';
 const natsUrl = process.env.NATS_URL ?? 'nats://127.0.0.1:4222';
+
+function localPort(value, fallback) {
+  try {
+    return Number(new URL(value).port || fallback);
+  } catch {
+    return fallback;
+  }
+}
+
+const redisPort = localPort(redisUrl, 6379);
+const natsPort = localPort(natsUrl, 4222);
+const natsMonitorPort = natsPort === 4222 ? 8222 : natsPort + 4000;
 const webHost = '127.0.0.1';
 
 const env = {
@@ -65,8 +77,8 @@ let db;
 let redis;
 let nats;
 try {
-  redis = await startRedis({ port: 6379 });
-  nats = await startNats({ port: 4222, monitorPort: 8222 });
+  redis = await startRedis({ port: redisPort });
+  nats = await startNats({ port: natsPort, monitorPort: natsMonitorPort });
   db = await ensureLocalPostgres({
     databaseUrl,
     dataDir: path.join(ROOT, '.data', 'postgres'),

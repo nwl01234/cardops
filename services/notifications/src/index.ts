@@ -56,7 +56,9 @@ function originAllowed(origin: string | undefined): boolean {
   return ORIGINS.has(origin);
 }
 
-async function principalFromToken(token: string | undefined): Promise<RealtimePrincipal> {
+async function principalFromToken(
+  token: string | undefined,
+): Promise<{ principal: RealtimePrincipal; sid: string }> {
   if (!token) throw new Error('missing ticket');
   const { payload } = await jwtVerify(token, new TextEncoder().encode(config.JWT_SECRET), {
     issuer: 'cardops',
@@ -82,11 +84,14 @@ async function principalFromToken(token: string | undefined): Promise<RealtimePr
     throw new Error('revoked session');
   }
   return {
-    id: payload.sub,
-    login: payload.login,
-    name: payload.name,
-    role: payload.role,
-    warehouseId: typeof payload.warehouseId === 'string' ? payload.warehouseId : null,
+    principal: {
+      id: payload.sub,
+      login: payload.login,
+      name: payload.name,
+      role: payload.role,
+      warehouseId: typeof payload.warehouseId === 'string' ? payload.warehouseId : null,
+    },
+    sid: payload.sid,
   };
 }
 
@@ -99,7 +104,7 @@ async function startNats(): Promise<void> {
       maxReconnectAttempts: -1,
       reconnectTimeWait: 1_000,
     });
-    await redis.set('cardops:infra:nats', 'up');
+    await redis.set('cardops:infra:nats', 'up', 'EX', 15);
     const subscription = nats.subscribe('cardops.events', { queue: 'notifications' });
     void (async () => {
       for await (const message of subscription) {
@@ -114,16 +119,16 @@ async function startNats(): Promise<void> {
     void (async () => {
       for await (const status of nats!.status()) {
         if (status.type === 'disconnect' || status.type === 'error') {
-          await redis.set('cardops:infra:nats', 'down');
+          await redis.set('cardops:infra:nats', 'down', 'EX', 15);
         }
         if (status.type === 'reconnect') {
-          await redis.set('cardops:infra:nats', 'up');
+          await redis.set('cardops:infra:nats', 'up', 'EX', 15);
         }
       }
     })();
     logger.info({ nats: config.NATS_URL }, 'NATS consumer connected');
   } catch (error) {
-    await redis.set('cardops:infra:nats', 'down');
+    await redis.set('cardops:infra:nats', 'down', 'EX', 15);
     logger.error({ err: error }, 'NATS connection failed; retrying in background');
     setTimeout(() => void startNats(), 2_000);
   }
@@ -164,16 +169,16 @@ app.get('/ws', async (c, next) => {
   if (!originAllowed(c.req.header('origin'))) {
     return c.text('Forbidden origin', 403);
   }
-  let principal: RealtimePrincipal;
+  let ticket: { principal: RealtimePrincipal; sid: string };
   try {
-    principal = await principalFromToken(tokenFromRequest(c.req.header('cookie')));
+    ticket = await principalFromToken(tokenFromRequest(c.req.header('cookie')));
   } catch {
     return c.text('Unauthorized', 401);
   }
 
   return ws.upgradeWebSocket(() => ({
     onOpen(_event, socket) {
-      hub.attach(socket, principal);
+      hub.attach(socket, ticket.principal, ticket.sid);
     },
     onClose(_event, socket) {
       hub.detach(socket);
@@ -194,8 +199,29 @@ const server = serve({ fetch: app.fetch, port: config.PORT, hostname: config.HOS
 });
 ws.injectWebSocket(server);
 
+async function revalidateSessions(): Promise<void> {
+  const sids = hub.sessionIds();
+  if (sids.length === 0) return;
+  try {
+    const pipeline = redis.pipeline();
+    for (const sid of sids) pipeline.exists(`cardops:session:${sid}`);
+    const results = await pipeline.exec();
+    results?.forEach(([error, value], index) => {
+      if (!error && value === 0) {
+        const sid = sids[index];
+        if (sid) hub.closeSession(sid);
+      }
+    });
+  } catch (error) {
+    logger.warn({ err: error }, 'Session revalidation failed');
+  }
+}
+
 const heartbeat = setInterval(() => {
   hub.heartbeat();
+  // Redis Pub/Sub is fire-and-forget: if this instance missed the revocation
+  // message, the periodic check still closes the socket within 10 seconds.
+  void revalidateSessions();
   const now = Date.now();
   void redis
     .multi()

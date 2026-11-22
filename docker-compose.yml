@@ -25,7 +25,7 @@ services:
       HOST: 0.0.0.0
       DATABASE_URL: postgres://cardops:cardops@postgres:5432/cardops
       JWT_SECRET: ${JWT_SECRET:?Set JWT_SECRET to a unique value of at least 32 characters}
-      JWT_TTL_MINUTES: 480
+      JWT_TTL_MINUTES: 15
       WEB_ORIGIN: http://localhost:3000
       COOKIE_SECURE: 'false'
       ALLOW_INSECURE_COOKIE: 'true'

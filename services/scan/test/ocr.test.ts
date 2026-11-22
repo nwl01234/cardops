@@ -8,6 +8,7 @@ describe('OCR SKU extraction', () => {
 
   it('normalizes lowercase and ignores unrelated text', () => {
     expect(extractSku('code: crd-abcd-1234')).toBe('CRD-ABCD-1234');
+    expect(extractSku('short form CRD-ABCD')).toBe('CRD-ABCD');
     expect(extractSku('no card here')).toBeNull();
   });
 });

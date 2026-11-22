@@ -1,6 +1,7 @@
 $ErrorActionPreference = 'SilentlyContinue'
 $root = (Resolve-Path (Join-Path $PSScriptRoot '..')).Path
 $normalizedRoot = $root.ToLowerInvariant()
+$normalizedRootPosix = $normalizedRoot.Replace('\', '/')
 $stateFile = Join-Path $root '.data\demo-pids.json'
 
 function Stop-ProcessTree([int]$processId) {
@@ -36,12 +37,19 @@ if (Test-Path $stateFile) {
     Remove-Item $stateFile -Force
 }
 
-# Fallback for a stale checkout: only node processes that clearly belong to
-# this repository (their command line contains the absolute project path).
+# Fallback for a stale checkout: only demo processes that clearly belong to
+# this repository. Exclude tests/typecheck runs (vitest/tsc) so stop-demo does
+# not kill a developer's verification process.
 $targets = Get-CimInstance Win32_Process | Where-Object {
     $cmd = $_.CommandLine
     if (-not $cmd -or $_.Name -notin @('node.exe', 'postgres.exe', 'redis-server.exe', 'nats-server.exe')) { return $false }
-    $cmd.ToLowerInvariant().Contains($normalizedRoot)
+    $lower = $cmd.ToLowerInvariant()
+    if (-not ($lower.Contains($normalizedRoot) -or $lower.Contains($normalizedRootPosix))) { return $false }
+    if ($lower.Contains('vitest') -or $lower.Contains('tsc --noemit')) { return $false }
+    return $lower.Contains('scripts\dev.mjs') -or
+        $lower.Contains('scripts\watchdog.mjs') -or
+        $lower.Contains('tsx') -or
+        $lower.Contains('vite')
 }
 
 foreach ($target in $targets) {
@@ -49,12 +57,18 @@ foreach ($target in $targets) {
     $stopped++
 }
 
-# embedded-postgres may outlive a force-killed launcher.
+# embedded-postgres may outlive a force-killed launcher. Do not touch the
+# separate postgres-test cluster used by `npm test`. Command lines may use
+# either Windows or POSIX separators.
+$pgWin = "$normalizedRoot\.data\postgres"
+$pgPosix = "$($normalizedRoot.Replace('\', '/'))/.data/postgres"
 Get-CimInstance Win32_Process |
     Where-Object {
-        $_.Name -eq 'postgres.exe' -and
-        $_.CommandLine -and
-        $_.CommandLine.ToLowerInvariant().Contains("$normalizedRoot\.data\postgres")
+        if ($_.Name -ne 'postgres.exe' -or -not $_.CommandLine) { return $false }
+        $cmd = $_.CommandLine.ToLowerInvariant()
+        $isData = $cmd.Contains($pgWin) -or $cmd.Contains($pgPosix)
+        $isTest = $cmd.Contains("$pgWin-test") -or $cmd.Contains("$pgPosix-test")
+        return $isData -and -not $isTest
     } |
     ForEach-Object {
         Write-Host "[CardOps] Stopping PostgreSQL PID $($_.ProcessId)"

@@ -30,13 +30,14 @@ outbox-consumer вынесены. Как дробить дальше — опи�
 
 - API: **22 теста**;
 - web: **5 тестов**;
-- notifications: **3 теста**;
+- notifications: **5 тестов**;
 - scan/OCR: **4 теста**;
 - typecheck всех workspace-пакетов;
 - production build всех сервисов;
 - `npm audit --omit=dev`: **0 уязвимостей** в runtime-зависимостях;
-- secret scan рабочего дерева: токенов, приватных ключей и demo-secret в
-  отслеживаемых файлах нет;
+- secret scan рабочего дерева: реальных токенов и приватных ключей нет;
+  `.env.example` содержит только placeholder, который production-guard
+  отвергает;
 - вручную: refresh после удаления access-cookie, отзыв сессий, два WS-инстанса
   с Redis fanout, одноразовый WS ticket, cross-origin POST → 403, OCR по
   реальному PNG (`CRD-DEMO-01`, confidence 92%), OCR quota, outbox-worker →
@@ -152,9 +153,11 @@ core API ── transaction ──► PostgreSQL (cards, operations, outbox)
    В БД хранится только SHA-256 хеш.
 3. **Rotation:** refresh выдаёт новую пару и отзывает старую запись. Повторное
    использование старого refresh → revoke всей family + всех Redis-сессий.
-4. **Revocation:** logout и admin «отозвать сессии» удаляют Redis session;
-   access сразу получает 401. Уведомление идёт в Redis, notifications закрывает
-   WebSocket этого пользователя.
+4. **Revocation:** logout и admin «отозвать сессии» удаляют Redis session и
+   ставят tombstone с timestamp. `SessionStore.isActive` сравнивает его с
+   `createdAt` сессии, поэтому refresh, начавшийся до отзыва, не воскрешает
+   доступ. Access сразу получает 401; notifications закрывает WebSocket
+   пользователя.
 5. **Role/object scope:** JWT говорит identity, но роль/склад читаются из БД на
    каждом запросе; object-level правило отдельное.
 
@@ -175,7 +178,7 @@ core API ── transaction ──► PostgreSQL (cards, operations, outbox)
 | OCR abuse / parser attack         | Auth, per-user quota, 8 MB, MIME + magic bytes, один Tesseract-worker                                    | CPU-нагрузка при распределённом флуде легальными аккаунтами |
 | Секреты в repo                    | `.env`/`.data` в `.gitignore`, production отказывается стартовать с demo-secret, secret scan             | Человеческий фактор при новом конфиге                       |
 | Утечка realtime-данных            | Фильтр visibility на сервере: admin / warehouse / manager                                                | Ошибка в правиле visibility                                 |
-| Отзыв сессии                      | Redis Pub/Sub закрывает WebSocket пользователя; REST получает 401                                        | Задержка доставки Pub/Sub — миллисекунды                    |
+| Отзыв сессии                      | Redis Pub/Sub закрывает WebSocket; heartbeat раз в 10 с перепроверяет `sid` в Redis                      | Pub/Sub доставляется за миллисекунды, fallback — до 10 с    |
 
 Осознанно **не** заявляется как закрытое: MFA/OIDC, key rotation, WAF,
 антивирус для uploads, encrypted backups, WORM-аудит. Это перечислено в
@@ -227,7 +230,11 @@ COMMIT;
 5. Каждый notifications-инстанс рассылает событие своим WebSocket-клиентам.
 6. Клиент инвалидирует TanStack Query и перезапрашивает REST; WS не является
    источником бизнес-данных.
-7. Доставка at-least-once, клиент дедуплицирует по `event.id`.
+7. Outbox гарантирует durable enqueue и **at-least-once попытки** публикации.
+   Core NATS не подтверждает доставку подписчику, поэтому end-to-end это
+   **best-effort fanout**: событие может потеряться, если notifications
+   недоступен в момент публикации. Клиент дедуплицирует по `event.id`; для
+   production нужен JetStream durable consumer с ack после Redis publish.
 
 Проверено на двух инстансах notifications (`8790`, `8793`): событие
 `card.issued` получили оба.
@@ -255,6 +262,8 @@ start-demo.bat
 Runner:
 
 - скачивает Redis/NATS Windows binaries в `.data/bin` при первом запуске;
+- первый OCR скачивает `eng.traineddata` в `.data/tessdata` (нужна сеть) или
+  можно положить файл туда заранее;
 - поднимает Redis 6379 и NATS 4222 (или переиспользует уже запущенные);
 - поднимает embedded PostgreSQL 17;
 - применяет миграции и seed;
@@ -361,12 +370,16 @@ curl -s -b cookies.txt -H 'Content-Type: application/json' \
 npm test
 ```
 
+> Запускайте тесты только из корня. `apps/api/test/global-setup.ts` отказывается
+> работать с БД, которая не выглядит одноразовой, поэтому прямой
+> `npm run test -w @cardops/api` не может случайно очистить demo-базу.
+
 - API: **22** — auth/refresh rotation/reuse, session revoke, admin CRUD,
   self-lockout/last-admin guards, CSRF Origin, WS ticket cookie, RBAC, object
   scope, idempotency, concurrent duplicates, state machine, audit trigger,
   outbox row, dashboard/scan.
 - Web: **5** — role affordances, status UI.
-- Notifications: **3** — admin/warehouse/manager visibility.
+- Notifications: **5** — admin/warehouse/manager visibility, session close.
 - Scan: **4** — SKU extraction from noisy OCR text, magic-byte validation.
 
 Ожидаемо:
@@ -374,7 +387,7 @@ npm test
 ```
 API            Tests 22 passed
 Web            Tests 5 passed
-Notifications  Tests 3 passed
+Notifications  Tests 5 passed
 Scan           Tests 4 passed
 ```
 

@@ -29,10 +29,17 @@ if (process.env.SKIP_LOCAL_DB !== '1') {
 }
 
 const redisUrl = process.env.TEST_REDIS_URL ?? 'redis://127.0.0.1:6380';
+const redisPort = (() => {
+  try {
+    return Number(new URL(redisUrl).port || 6380);
+  } catch {
+    return 6380;
+  }
+})();
 let redis;
 if (process.env.SKIP_LOCAL_DB !== '1') {
   redis = await startRedis({
-    port: 6380,
+    port: redisPort,
     dataDir: path.join(ROOT, '.data', 'redis-test'),
   });
 }

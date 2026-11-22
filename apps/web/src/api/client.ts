@@ -53,7 +53,9 @@ interface RequestOptions {
   retriedAuth?: boolean;
 }
 
-async function refreshSession(): Promise<boolean> {
+let refreshInFlight: Promise<boolean> | null = null;
+
+async function performRefresh(): Promise<boolean> {
   try {
     const response = await fetch('/api/auth/refresh', {
       method: 'POST',
@@ -63,6 +65,25 @@ async function refreshSession(): Promise<boolean> {
   } catch {
     return false;
   }
+}
+
+/**
+ * Single-flight + cross-tab serialization. Refresh rotation is strict: two
+ * tabs refreshing the same cookie at once would invalidate one another. Web
+ * Locks serialize the call across tabs; the shared cookie jar then lets the
+ * second tab rotate the token written by the first.
+ */
+async function refreshSession(): Promise<boolean> {
+  if (refreshInFlight) return refreshInFlight;
+  refreshInFlight = (async () => {
+    if (navigator.locks?.request) {
+      return navigator.locks.request('cardops-refresh', performRefresh);
+    }
+    return performRefresh();
+  })().finally(() => {
+    refreshInFlight = null;
+  });
+  return refreshInFlight;
 }
 
 async function request<T>(path: string, options: RequestOptions = {}): Promise<T> {
@@ -221,13 +242,23 @@ export const api = {
 
   scan: {
     async ocr(file: File): Promise<OcrResultDto> {
-      const form = new FormData();
-      form.append('image', file);
-      const response = await fetch('/ocr-api/ocr', {
-        method: 'POST',
-        credentials: 'include',
-        body: form,
-      });
+      const send = () => {
+        const form = new FormData();
+        form.append('image', file);
+        return fetch('/ocr-api/ocr', {
+          method: 'POST',
+          credentials: 'include',
+          body: form,
+        });
+      };
+
+      let response = await send();
+      // The OCR service shares the access cookie with the core API. Use the
+      // same refresh path instead of surfacing a spurious "login required".
+      if (response.status === 401 && (await refreshSession())) {
+        response = await send();
+      }
+
       const payload = (await response.json().catch(() => null)) as {
         data?: OcrResultDto;
         error?: { message?: string };

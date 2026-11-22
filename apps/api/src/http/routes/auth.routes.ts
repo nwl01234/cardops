@@ -17,9 +17,8 @@ import { signRealtimeTicket } from '../../modules/auth/token';
 function clientIp(c: AppContext, trustProxy: boolean): string {
   if (!trustProxy) return 'local';
 
-  const realIp = c.req.header('x-real-ip')?.trim();
-  if (realIp) return realIp;
-
+  // Only the hop appended by our own proxy is trusted. X-Real-IP can be
+  // supplied by the client when Vite/nginx is not the one overwriting it.
   const forwarded = c.req.header('x-forwarded-for');
   if (!forwarded) return 'local';
   const hops = forwarded
@@ -63,7 +62,13 @@ export function authRoutes(deps: AppDeps, service: AuthService): Hono<AppEnv> {
     }
 
     const result = await service.login(input, meta(c, deps));
-    await deps.rateLimiter.reset(loginKey);
+    // Successful login clears all three counters. Otherwise an office NAT or
+    // a busy account accumulates successful attempts and locks itself out.
+    await Promise.all([
+      deps.rateLimiter.reset(loginKey),
+      deps.rateLimiter.reset(`login-account:${login}`),
+      deps.rateLimiter.reset(`login-ip:${ip}`),
+    ]);
     setAuthCookies(c, deps.config, result);
 
     return c.json({

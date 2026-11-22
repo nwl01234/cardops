@@ -5,6 +5,7 @@ import type { RedisClient } from './lib/redis';
 import type { OutboxSignal } from './realtime/outbox.signal';
 import type { RedisRateLimiter } from './modules/auth/rate-limiter';
 import type { SessionStore } from './modules/auth/session-store';
+import type { DocumentsClient } from './modules/documents/documents.client';
 
 export interface AppDeps {
   config: AppConfig;
@@ -14,4 +15,5 @@ export interface AppDeps {
   sessions: SessionStore;
   outbox: OutboxSignal;
   rateLimiter: RedisRateLimiter;
+  documents: DocumentsClient;
 }

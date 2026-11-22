@@ -7,6 +7,7 @@ import { createApp } from './http/app';
 import { RedisRateLimiter } from './modules/auth/rate-limiter';
 import { SessionStore } from './modules/auth/session-store';
 import { RedisOutboxSignal } from './realtime/outbox.signal';
+import { DocumentsClient } from './modules/documents/documents.client';
 import type { AppDeps } from './app.deps';
 
 const config = loadConfig();
@@ -23,6 +24,7 @@ const deps: AppDeps = {
   sessions,
   outbox: new RedisOutboxSignal(redis),
   rateLimiter: new RedisRateLimiter(redis),
+  documents: new DocumentsClient(config),
 };
 
 const app = createApp(deps);

@@ -3,7 +3,7 @@ import { createNodeWebSocket } from '@hono/node-ws';
 import { Hono } from 'hono';
 import { jwtVerify } from 'jose';
 import Redis from 'ioredis';
-import { connect, type NatsConnection } from 'nats';
+import { connect, consumerOpts, type NatsConnection } from 'nats';
 import pino from 'pino';
 import type { RealtimeEvent } from '@cardops/shared';
 import { loadConfig } from './env';
@@ -105,14 +105,41 @@ async function startNats(): Promise<void> {
       reconnectTimeWait: 1_000,
     });
     await redis.set('cardops:infra:nats', 'up', 'EX', 15);
-    const subscription = nats.subscribe('cardops.events', { queue: 'notifications' });
+    const jsm = await nats.jetstreamManager();
+    try {
+      await jsm.streams.info('CARDOPS');
+    } catch {
+      await jsm.streams.add({
+        name: 'CARDOPS',
+        subjects: ['cardops.events'],
+        max_age: 7 * 24 * 60 * 60 * 1_000_000_000,
+      });
+    }
+    const js = nats.jetstream();
+    const consumer = consumerOpts();
+    consumer.durable('notifications');
+    consumer.bindStream('CARDOPS');
+    consumer.manualAck();
+    consumer.ackExplicit();
+    consumer.maxAckPending(100);
+    consumer.ackWait(30_000);
+    // Pull consumer with a durable name: all notifications instances share the
+    // same cursor and ack only after Redis fan-out.
+    const subscription = await js.pullSubscribe('cardops.events', consumer);
+    subscription.pull({ batch: 100, expires: 60_000 });
+    const pullTimer = setInterval(() => subscription.pull({ batch: 100, expires: 60_000 }), 45_000);
+    pullTimer.unref();
     void (async () => {
       for await (const message of subscription) {
         try {
           const event = JSON.parse(new TextDecoder().decode(message.data)) as RealtimeEvent;
           await redis.publish('cardops.ws.events', JSON.stringify(event));
+          message.ack();
         } catch (error) {
-          logger.warn({ err: error }, 'Invalid NATS event');
+          // Invalid JSON is poison; a Redis failure is retryable.
+          if (error instanceof SyntaxError) message.term();
+          else message.nak(1_000);
+          logger.warn({ err: error }, 'NATS event was not fanned out');
         }
       }
     })();

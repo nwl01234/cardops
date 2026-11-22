@@ -11,20 +11,22 @@ WebSocket fanout, OCR, админка пользователей, tracing, alert
 
 ## 1. What this is
 
-| Сервис            |  Порт | Ответственность                                                 |
-| ----------------- | ----: | --------------------------------------------------------------- |
-| **web**           |  5173 | React SPA, кабинеты admin/manager/warehouse                     |
-| **core API**      |  8787 | auth/session, users, cards, warehouse, audit, dashboard, system |
-| **notifications** |  8790 | WebSocket gateway + Redis fanout + NATS consumer                |
-| **scan**          |  8791 | Tesseract.js OCR: фото → текст → SKU                            |
-| **outbox worker** |     — | `outbox_events → NATS` отдельным процессом                      |
-| **PostgreSQL**    | 55432 | users, cards, operations, refresh tokens, idempotency, outbox   |
-| **Redis**         |  6379 | rate limit, sessions, WS fanout, traces, worker heartbeat       |
-| **NATS**          |  4222 | доменные события `cardops.events`                               |
+| Сервис             |  Порт | Ответственность                                                 |
+| ------------------ | ----: | --------------------------------------------------------------- |
+| **web**            |  5173 | React SPA, кабинеты admin/manager/warehouse                     |
+| **core API**       |  8787 | auth/session, users, cards, warehouse, audit, dashboard, system |
+| **notifications**  |  8790 | WebSocket gateway + Redis fanout + NATS consumer                |
+| **scan**           |  8791 | Tesseract.js OCR: фото → текст → SKU                            |
+| **documents**      |  8792 | PDF-акт по карте + запись в MinIO/S3                            |
+| **outbox worker**  |     — | `outbox_events → JetStream` отдельным процессом                 |
+| **PostgreSQL**     | 55432 | users, cards, operations, refresh tokens, idempotency, outbox   |
+| **Redis**          |  6379 | rate limit, sessions, WS fanout, traces, worker heartbeat       |
+| **NATS JetStream** |  4222 | durable stream `CARDOPS`, DLQ, replay                           |
+| **S3 / MinIO**     |  9000 | артефакты документов, presigned-ready bucket                    |
 
 Это **не 10 микросервисов ради галочки**. Границы проведены там, где реально
-разные lifecycle/нагрузки: auth+cards остаются в core, а realtime, OCR и
-outbox-consumer вынесены. Как дробить дальше — описано в §13.
+разные lifecycle/нагрузки: auth+cards остаются в core, а realtime, OCR,
+documents и outbox-consumer вынесены. Как дробить дальше — описано в §13.
 
 ### Что проверено
 
@@ -38,11 +40,11 @@ outbox-consumer вынесены. Как дробить дальше — опи�
 - secret scan рабочего дерева: реальных токенов и приватных ключей нет;
   `.env.example` содержит только placeholder, который production-guard
   отвергает;
-- вручную: refresh после удаления access-cookie, отзыв сессий, два WS-инстанса
-  с Redis fanout, одноразовый WS ticket, cross-origin POST → 403, OCR по
-  реальному PNG (`CRD-DEMO-01`, confidence 92%), OCR quota, outbox-worker →
-  NATS → notifications, backup/restore, autocannon smoke без non-2xx
-  (порядка 300–400 rps на текущей dev-машине);
+- вручную: refresh после удаления access-cookie, параллельный refresh, отзыв
+  сессий, одноразовый WS ticket, cross-origin POST → 403, OCR по реальному PNG
+  (`CRD-DEMO-01`, confidence 92%), OCR quota, **JetStream end-to-end**,
+  DLQ/replay, PDF-акт с записью в S3, backup/restore, autocannon smoke без
+  non-2xx (порядка 300–400 rps на текущей dev-машине);
 - Docker не входит в текущий этап: compose-файл **не обновлён** под сервисный
   контур. Проверенный запуск — `start-demo.bat`.
 
@@ -138,12 +140,23 @@ core API ── transaction ──► PostgreSQL (cards, operations, outbox)
 - **не принимает бизнес-решений**: код уходит обратно в UI, затем в обычный
   `/api/scan`, где API проверяет scope и статус.
 
+### Documents
+
+- отдельный процесс, внутренний токен, наружу не публикуется;
+- core API проверяет object scope и передаёт снимок карты;
+- PDFKit/pdf-lib + Noto Sans (кириллица), акт по карте;
+- PDF сохраняется в MinIO/S3 bucket `cardops-documents`;
+- локальный no-Docker runner поднимает S3-совместимый `s3rver`, в production
+  тот же код работает с MinIO через S3 API.
+
 ### Outbox worker
 
 - отдельный процесс;
 - lease через `FOR UPDATE SKIP LOCKED`;
-- публикует `{id, ...payload}` в NATS `cardops.events`;
-- backoff и `last_error` при ошибке;
+- публикует `{id, ...payload}` в **JetStream** stream `CARDOPS`;
+- после `PubAck` помечает событие processed;
+- backoff, `last_error`, DLQ после 10 попыток;
+- replay DLQ из `/api/system` сбрасывает событие в очередь;
 - heartbeat в Redis для alerts.
 
 ## 5. AuthN / AuthZ
@@ -230,14 +243,16 @@ COMMIT;
 5. Каждый notifications-инстанс рассылает событие своим WebSocket-клиентам.
 6. Клиент инвалидирует TanStack Query и перезапрашивает REST; WS не является
    источником бизнес-данных.
-7. Outbox гарантирует durable enqueue и **at-least-once попытки** публикации.
-   Core NATS не подтверждает доставку подписчику, поэтому end-to-end это
-   **best-effort fanout**: событие может потеряться, если notifications
-   недоступен в момент публикации. Клиент дедуплицирует по `event.id`; для
-   production нужен JetStream durable consumer с ack после Redis publish.
+7. Outbox + **JetStream** дают end-to-end at-least-once: worker ждёт
+   `PubAck`, notifications ack-ает сообщение только после Redis publish.
+   Если notifications недоступен, сообщение остаётся у durable consumer.
+8. После 10 неудачных попыток worker переводит событие в **DLQ**
+   (`dead_lettered_at`), а админ может сделать replay из `/api/system`.
+9. Клиент дедуплицирует по `event.id`; повторная доставка не создаёт второй
+   эффект.
 
-Проверено на двух инстансах notifications (`8790`, `8793`): событие
-`card.issued` получили оба.
+Durable consumer `notifications` общий для нескольких инстансов: каждый
+забирает свою пачку, ack общий.
 
 ## 8. OCR / mobile scanner
 
@@ -264,10 +279,10 @@ Runner:
 - скачивает Redis/NATS Windows binaries в `.data/bin` при первом запуске;
 - первый OCR скачивает `eng.traineddata` в `.data/tessdata` (нужна сеть) или
   можно положить файл туда заранее;
-- поднимает Redis 6379 и NATS 4222 (или переиспользует уже запущенные);
-- поднимает embedded PostgreSQL 17;
+- поднимает Redis 6379 и NATS 4222 с JetStream (или переиспользует запущенные);
+- поднимает S3-совместимый store на 9000 (MinIO API) и embedded PostgreSQL 17;
 - применяет миграции и seed;
-- запускает core API, notifications, scan, outbox-worker и web;
+- запускает core API, notifications, scan, documents, outbox-worker и web;
 - пишет `.data/demo-pids.json` и запускает watchdog;
 - открывает `http://127.0.0.1:5173`.
 
@@ -352,10 +367,13 @@ curl -s -b cookies.txt -H 'Content-Type: application/json' \
 | POST           | `/api/cards`                           | admin/warehouse + Idempotency-Key |
 | GET            | `/api/cards/:id`                       | auth + object scope               |
 | POST           | `/api/cards/:id/transitions`           | role/object + Idempotency-Key     |
+| POST           | `/api/cards/:id/act`                   | auth + object scope → PDF         |
+| POST           | `/api/system/outbox/replay`            | admin, replay DLQ                 |
 | GET            | `/api/audit`                           | auth + scope                      |
 | GET            | `/api/dashboard`                       | auth + scope                      |
 | POST           | `/api/scan`                            | auth + scope                      |
 | POST           | `/ocr-api/ocr`                         | access cookie + Redis session     |
+| POST           | `/documents/act`                       | internal token, core → documents  |
 | GET            | `/api/system`                          | admin                             |
 | GET            | `/api/health`                          | public                            |
 | WS             | `/ws`                                  | HttpOnly ticket cookie            |
@@ -400,10 +418,12 @@ ticket; cross-origin POST → 403; backup/restore; autocannon smoke без ош�
 - **Не 10 сервисов.** Core (identity+cards+audit) остаётся модульным монолитом.
   Причина: split identity/cards потребует sagas/outbox для пользовательских
   данных и даст больше распределённой сложности, чем пользы для demo. Реальные
-  границы уже вынесены: realtime, OCR, outbox-worker.
+  границы уже вынесены: realtime, OCR, documents, outbox-worker.
 - **Один PostgreSQL.** В production — отдельная БД/схема и права на сервис.
-- **Redis/NATS локальные binaries**, не кластер; в production — managed Redis,
-  NATS JetStream с persistence/DLQ.
+- **Redis/NATS локальные binaries**, не кластер. JetStream уже даёт durable
+  stream, ack и DLQ; production — 3-node NATS и managed Redis.
+- **Документы**: локальный runner использует S3-совместимый `s3rver`, код
+  работает через MinIO client; production — MinIO/S3 с versioning и KMS.
 - **Refresh/access в cookie**, без OIDC/SSO; для enterprise — OIDC, key rotation,
   session version.
 - **Rate limit фиксированное окно в Redis**, не sliding-window cluster.
@@ -439,11 +459,13 @@ NAPI/worker-совместимости. В CI сейчас Node 22.
 │  ├─ web/                     React SPA
 │  └─ …
 ├─ services/
-│  ├─ notifications/           WS gateway + NATS consumer + Redis fanout
+│  ├─ notifications/           WS gateway + JetStream consumer + Redis fanout
 │  ├─ scan/                    Tesseract OCR
-│  └─ outbox-worker/           outbox → NATS
+│  ├─ documents/               PDF act + MinIO/S3 storage
+│  └─ outbox-worker/           outbox → JetStream + DLQ
 ├─ packages/shared/            Zod contracts, state machine, permissions
 ├─ demo-codes/                 real/fake QR + Code 128 + README (not served)
+├─ .assets/screens/            screenshots for portfolio/README
 ├─ scripts/                    dev/infra/test/backup/restore/load/stop/watchdog
 ├─ .data/bin/                  локальные Redis/NATS binaries (gitignored)
 ├─ start-demo.bat
@@ -460,7 +482,7 @@ NAPI/worker-совместимости. В CI сейчас Node 22.
 3. `apps/api/src/modules/cards/cards.repo.ts` — object scope + `FOR UPDATE`.
 4. `services/notifications/src/index.ts` — ticket auth, NATS→Redis→WS fanout,
    distributed instances.
-5. `services/outbox-worker/src/index.ts` — lease, NATS publish, backoff.
+5. `services/outbox-worker/src/index.ts` — lease, JetStream publish, DLQ, backoff.
+6. `services/documents/src/pdf.ts` — PDF act with Cyrillic font.
 
 Бонус: `services/scan/src/ocr.ts` — OCR + SKU extraction without business logic.
-

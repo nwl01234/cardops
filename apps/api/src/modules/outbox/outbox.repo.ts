@@ -91,8 +91,11 @@ export async function markOutboxFailed(
 }
 
 export async function getOutboxStats(db: Database): Promise<OutboxStatsDto> {
-  const [pendingRows, processedRows, failedRows, oldestRows] = await Promise.all([
-    db.select({ value: count() }).from(outboxEvents).where(isNull(outboxEvents.processedAt)),
+  const [pendingRows, processedRows, failedRows, deadRows, oldestRows] = await Promise.all([
+    db
+      .select({ value: count() })
+      .from(outboxEvents)
+      .where(and(isNull(outboxEvents.processedAt), isNull(outboxEvents.deadLetteredAt))),
     db
       .select({ value: count() })
       .from(outboxEvents)
@@ -103,14 +106,19 @@ export async function getOutboxStats(db: Database): Promise<OutboxStatsDto> {
       .where(
         and(
           isNull(outboxEvents.processedAt),
+          isNull(outboxEvents.deadLetteredAt),
           isNotNull(outboxEvents.lastError),
           gte(outboxEvents.attempts, 5),
         ),
       ),
     db
+      .select({ value: count() })
+      .from(outboxEvents)
+      .where(and(isNull(outboxEvents.processedAt), isNotNull(outboxEvents.deadLetteredAt))),
+    db
       .select({ value: min(outboxEvents.occurredAt) })
       .from(outboxEvents)
-      .where(isNull(outboxEvents.processedAt)),
+      .where(and(isNull(outboxEvents.processedAt), isNull(outboxEvents.deadLetteredAt))),
   ]);
 
   const oldest = oldestRows[0]?.value ?? null;
@@ -120,9 +128,25 @@ export async function getOutboxStats(db: Database): Promise<OutboxStatsDto> {
     pending: Number(pendingRows[0]?.value ?? 0),
     processedLastHour: Number(processedRows[0]?.value ?? 0),
     failed: Number(failedRows[0]?.value ?? 0),
+    deadLettered: Number(deadRows[0]?.value ?? 0),
     oldestPendingAt: oldest?.toISOString() ?? null,
     lagSeconds,
   };
+}
+
+export async function replayDeadLetters(db: Database): Promise<number> {
+  const rows = await db
+    .update(outboxEvents)
+    .set({
+      processedAt: null,
+      deadLetteredAt: null,
+      attempts: 0,
+      lastError: null,
+      availableAt: new Date(),
+    })
+    .where(isNotNull(outboxEvents.deadLetteredAt))
+    .returning({ id: outboxEvents.id });
+  return rows.length;
 }
 
 export async function recentOutboxEvents(db: Database, limit: number) {
@@ -133,6 +157,7 @@ export async function recentOutboxEvents(db: Database, limit: number) {
       attempts: outboxEvents.attempts,
       occurredAt: outboxEvents.occurredAt,
       processedAt: outboxEvents.processedAt,
+      deadLetteredAt: outboxEvents.deadLetteredAt,
       lastError: outboxEvents.lastError,
     })
     .from(outboxEvents)

@@ -35,6 +35,11 @@ const envSchema = z.object({
     .default(15),
   REFRESH_TTL_DAYS: z.coerce.number().int().min(1).max(365).default(30),
   REDIS_URL: z.string().default('redis://127.0.0.1:6379'),
+  DOCUMENTS_URL: z.url().default('http://127.0.0.1:8792'),
+  DOCUMENTS_INTERNAL_TOKEN: z
+    .string()
+    .min(32)
+    .default('dev-only-documents-internal-token-change-me-please'),
   WEB_ORIGIN: z.url().default('http://localhost:5173'),
   COOKIE_SECURE: booleanFromString.default(false),
   ALLOW_INSECURE_COOKIE: booleanFromString.default(false),
@@ -71,10 +76,12 @@ export function loadConfig(source: NodeJS.ProcessEnv = process.env): AppConfig {
     }
     if (
       parsed.data.JWT_SECRET.startsWith('dev-only-') ||
-      parsed.data.JWT_SECRET.includes('change-me')
+      parsed.data.JWT_SECRET.includes('change-me') ||
+      parsed.data.DOCUMENTS_INTERNAL_TOKEN.startsWith('dev-only-') ||
+      parsed.data.DOCUMENTS_INTERNAL_TOKEN.includes('change-me')
     ) {
       throw new Error(
-        'Refusing production startup with the demo JWT_SECRET. Provide a unique secret (32+ chars).',
+        'Refusing production startup with demo secrets. Provide unique JWT_SECRET and DOCUMENTS_INTERNAL_TOKEN.',
       );
     }
   }

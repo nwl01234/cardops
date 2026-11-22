@@ -26,7 +26,7 @@ if (Test-Path $stateFile) {
         # The watchdog is intentionally not killed here: the cleaner may have
         # been spawned by it, and killing its process tree would kill this
         # cleaner too. The final fallback stops the watchdog after PostgreSQL.
-        foreach ($processId in @($state.api, $state.web, $state.notifications, $state.scan, $state.worker, $state.redis, $state.nats, $state.launcher)) {
+        foreach ($processId in @($state.api, $state.web, $state.notifications, $state.scan, $state.documents, $state.worker, $state.redis, $state.nats, $state.launcher)) {
             if ($null -ne $processId) {
                 Stop-ProcessTree ([int]$processId)
                 $stopped++

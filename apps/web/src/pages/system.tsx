@@ -1,3 +1,4 @@
+import { useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import {
   Activity,
@@ -7,6 +8,7 @@ import {
   Inbox,
   Radio,
   RefreshCw,
+  RotateCcw,
   ShieldCheck,
   Timer,
   TriangleAlert,
@@ -33,6 +35,14 @@ function outboxEventLabel(event: OutboxEventDto): string {
 }
 
 function OutboxStatus({ event }: { event: OutboxEventDto }) {
+  if (event.deadLetteredAt) {
+    return (
+      <span className="inline-flex items-center gap-1.5 rounded-full bg-rose-100 px-2.5 py-1 text-[10px] font-semibold text-rose-900">
+        <span className="size-1.5 rounded-full bg-rose-600" />
+        DLQ
+      </span>
+    );
+  }
   if (event.processedAt) {
     return (
       <span className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 px-2.5 py-1 text-[10px] font-semibold text-emerald-800">
@@ -59,6 +69,7 @@ function OutboxStatus({ event }: { event: OutboxEventDto }) {
 
 export function SystemPage() {
   useDocumentTitle('Система');
+  const [replaying, setReplaying] = useState(false);
   const query = useQuery({
     queryKey: qk.system,
     queryFn: ({ signal }) => api.system.get(signal),
@@ -84,14 +95,32 @@ export function SystemPage() {
         title="Состояние системы"
         description="Health, transactional outbox и realtime-подписчики. Экран доступен только роли admin."
         actions={
-          <Button
-            variant="secondary"
-            onClick={() => void query.refetch()}
-            loading={query.isFetching}
-            icon={<RefreshCw className="size-4" />}
-          >
-            Обновить
-          </Button>
+          <div className="flex gap-2">
+            {data.outbox.deadLettered > 0 ? (
+              <Button
+                variant="secondary"
+                loading={replaying}
+                onClick={() => {
+                  setReplaying(true);
+                  void api.system
+                    .replayDlq()
+                    .then(() => query.refetch())
+                    .finally(() => setReplaying(false));
+                }}
+                icon={<RotateCcw className="size-4" />}
+              >
+                Replay DLQ
+              </Button>
+            ) : null}
+            <Button
+              variant="secondary"
+              onClick={() => void query.refetch()}
+              loading={query.isFetching}
+              icon={<RefreshCw className="size-4" />}
+            >
+              Обновить
+            </Button>
+          </div>
         }
       />
 
@@ -167,7 +196,7 @@ export function SystemPage() {
         </div>
       ) : null}
 
-      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
+      <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-5">
         <KpiCard
           label="Outbox pending"
           value={data.outbox.pending}
@@ -182,7 +211,7 @@ export function SystemPage() {
         <KpiCard
           label="Обработано за час"
           value={data.outbox.processedLastHour}
-          hint="at-least-once delivery"
+          hint="JetStream + durable consumer"
           icon={Activity}
           tone="brand"
         />
@@ -192,6 +221,13 @@ export function SystemPage() {
           hint="backoff до 60 секунд"
           icon={TriangleAlert}
           tone={data.outbox.failed > 0 ? 'rose' : 'emerald'}
+        />
+        <KpiCard
+          label="Dead-letter"
+          value={data.outbox.deadLettered}
+          hint={data.outbox.deadLettered > 0 ? 'нужен replay' : 'DLQ пуста'}
+          icon={RotateCcw}
+          tone={data.outbox.deadLettered > 0 ? 'rose' : 'emerald'}
         />
         <KpiCard
           label="Outbox lag"

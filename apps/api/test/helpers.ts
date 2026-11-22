@@ -13,6 +13,7 @@ import { createRedis, type RedisClient } from '../src/lib/redis';
 import { RedisRateLimiter } from '../src/modules/auth/rate-limiter';
 import { SessionStore } from '../src/modules/auth/session-store';
 import { RedisOutboxSignal } from '../src/realtime/outbox.signal';
+import { DocumentsClient } from '../src/modules/documents/documents.client';
 
 export interface TestContext {
   deps: AppDeps;
@@ -45,6 +46,7 @@ export async function createTestContext(): Promise<TestContext> {
     sessions,
     outbox: new RedisOutboxSignal(redis),
     rateLimiter: new RedisRateLimiter(redis),
+    documents: new DocumentsClient(config),
   };
 
   return {

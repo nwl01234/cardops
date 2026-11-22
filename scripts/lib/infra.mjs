@@ -148,7 +148,7 @@ export async function startNats({
   await mkdir(dataDir, { recursive: true });
   const child = spawn(
     NATS_EXE,
-    ['-a', '127.0.0.1', '-p', String(port), '-m', String(monitorPort), '-sd', dataDir],
+    ['-a', '127.0.0.1', '-js', '-p', String(port), '-m', String(monitorPort), '-sd', dataDir],
     {
       stdio: 'ignore',
       windowsHide: true,

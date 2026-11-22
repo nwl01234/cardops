@@ -30,6 +30,7 @@
     "dev:web": "npm run dev --workspace @cardops/web",
     "dev:notifications": "npm run dev --workspace @cardops/notifications",
     "dev:scan": "npm run dev --workspace @cardops/scan",
+    "dev:documents": "npm run dev --workspace @cardops/documents",
     "dev:worker": "npm run dev --workspace @cardops/outbox-worker",
     "db:backup": "node scripts/backup.mjs",
     "db:restore": "node scripts/restore.mjs",
@@ -38,7 +39,7 @@
     "db:migrate": "npm run db:migrate --workspace @cardops/api",
     "db:seed": "npm run db:seed --workspace @cardops/api",
     "db:reset": "node scripts/reset-db.mjs",
-    "build": "npm run build --workspace @cardops/api && npm run build --workspace @cardops/web && npm run build --workspace @cardops/notifications && npm run build --workspace @cardops/scan && npm run build --workspace @cardops/outbox-worker",
+    "build": "npm run build --workspace @cardops/api && npm run build --workspace @cardops/web && npm run build --workspace @cardops/notifications && npm run build --workspace @cardops/scan && npm run build --workspace @cardops/documents && npm run build --workspace @cardops/outbox-worker",
     "typecheck": "npm run typecheck --workspaces --if-present",
     "test": "node scripts/test.mjs",
     "test:only": "npm run test --workspace @cardops/api",
@@ -50,6 +51,7 @@
     "autocannon": "8.0.0",
     "embedded-postgres": "17.9.0-beta.17",
     "prettier": "3.8.1",
+    "s3rver": "^3.7.1",
     "typescript": "5.9.3"
   }
 }

@@ -218,6 +218,7 @@ export interface OutboxStatsDto {
   pending: number;
   processedLastHour: number;
   failed: number;
+  deadLettered: number;
   oldestPendingAt: string | null;
   lagSeconds: number;
 }
@@ -228,6 +229,7 @@ export interface OutboxEventDto {
   attempts: number;
   occurredAt: string;
   processedAt: string | null;
+  deadLetteredAt: string | null;
   lastError: string | null;
 }
 

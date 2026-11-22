@@ -8,6 +8,7 @@ import {
   CalendarClock,
   ChevronRight,
   CreditCard,
+  Download,
   History,
   Lock,
   PackageCheck,
@@ -88,6 +89,28 @@ export function CardDetailPage() {
   const { user } = useAuth();
   const { toast } = useToast();
   const queryClient = useQueryClient();
+  const [actLoading, setActLoading] = useState(false);
+
+  const downloadAct = async (cardId: string, sku: string) => {
+    setActLoading(true);
+    try {
+      const blob = await api.cards.act(cardId);
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement('a');
+      anchor.href = url;
+      anchor.download = `cardops-${sku}.pdf`;
+      anchor.click();
+      URL.revokeObjectURL(url);
+    } catch {
+      toast({
+        title: 'Акт не сформирован',
+        description: 'Сервис документов недоступен, попробуйте ещё раз.',
+        tone: 'error',
+      });
+    } finally {
+      setActLoading(false);
+    }
+  };
   const [action, setAction] = useState<TransitionAction | null>(null);
   const idempotencyKey = useRef(newIdempotencyKey('transition'));
 
@@ -226,6 +249,15 @@ export function CardDetailPage() {
         </div>
 
         <div className="flex shrink-0 gap-2">
+          <button
+            type="button"
+            className={buttonStyles('secondary', 'md')}
+            onClick={() => void downloadAct(card.id, card.sku)}
+            disabled={actLoading}
+          >
+            <Download className="size-4" />
+            {actLoading ? 'Формируем…' : 'Скачать акт'}
+          </button>
           <Link to={`/audit?cardId=${card.id}`} className={buttonStyles('secondary', 'md')}>
             <History className="size-4" />
             История в журнале

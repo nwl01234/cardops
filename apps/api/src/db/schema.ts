@@ -183,6 +183,7 @@ export const outboxEvents = pgTable(
     occurredAt: timestamp({ withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     availableAt: timestamp({ withTimezone: true, mode: 'date' }).notNull().defaultNow(),
     processedAt: timestamp({ withTimezone: true, mode: 'date' }),
+    deadLetteredAt: timestamp({ withTimezone: true, mode: 'date' }),
     attempts: integer().notNull().default(0),
     lastError: text(),
   },

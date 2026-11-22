@@ -11,7 +11,7 @@ import type { CardsService } from '../../modules/cards/cards.service';
 
 const cardIdSchema = z.uuid('Card id must be a UUID');
 
-export function cardRoutes(_deps: AppDeps, service: CardsService): Hono<AppEnv> {
+export function cardRoutes(deps: AppDeps, service: CardsService): Hono<AppEnv> {
   const router = new Hono<AppEnv>();
 
   router.get('/', async (c) => {
@@ -34,6 +34,19 @@ export function cardRoutes(_deps: AppDeps, service: CardsService): Hono<AppEnv> 
     const id = parseParam(c, 'id', cardIdSchema);
     const card = await service.detail(getPrincipal(c), id);
     return sendData(c, card);
+  });
+
+  router.post('/:id/act', async (c) => {
+    const id = parseParam(c, 'id', cardIdSchema);
+    const card = await service.detail(getPrincipal(c), id);
+    const pdf = await deps.documents.act(card);
+    return new Response(Buffer.from(pdf), {
+      headers: {
+        'content-type': 'application/pdf',
+        'content-disposition': `attachment; filename="cardops-${card.sku}.pdf"`,
+        'cache-control': 'private, no-store',
+      },
+    });
   });
 
   router.post('/:id/transitions', async (c) => {

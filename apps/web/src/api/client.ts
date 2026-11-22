@@ -214,6 +214,19 @@ export const api = {
         }),
       );
     },
+    async act(id: string): Promise<Blob> {
+      const send = () =>
+        fetch(`/api/cards/${id}/act`, {
+          method: 'POST',
+          credentials: 'include',
+        });
+      let response = await send();
+      if (response.status === 401 && (await refreshSession())) response = await send();
+      if (!response.ok) {
+        throw new ApiError('INTERNAL_ERROR', 'Не удалось сформировать акт', response.status);
+      }
+      return response.blob();
+    },
   },
 
   audit: {
@@ -302,6 +315,12 @@ export const api = {
   system: {
     async get(signal?: AbortSignal): Promise<SystemHealthDto> {
       return unwrap(await request<{ data: SystemHealthDto }>('/system', { signal }));
+    },
+    async replayDlq(): Promise<number> {
+      const body = unwrap(
+        await request<{ data: { replayed: number } }>('/system/outbox/replay', { method: 'POST' }),
+      );
+      return body.replayed;
     },
   },
 };

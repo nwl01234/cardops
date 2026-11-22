@@ -4,7 +4,11 @@ import type { AppDeps } from '../../app.deps';
 import type { AppEnv } from '../context';
 import { requireCapability } from '../middleware/auth';
 import { sendData } from '../respond';
-import { getOutboxStats, recentOutboxEvents } from '../../modules/outbox/outbox.repo';
+import {
+  getOutboxStats,
+  recentOutboxEvents,
+  replayDeadLetters,
+} from '../../modules/outbox/outbox.repo';
 
 interface TraceSpan {
   traceId: string | null;
@@ -61,6 +65,13 @@ export function systemRoutes(deps: AppDeps): Hono<AppEnv> {
         message: `${outbox.failed} outbox event(s) need retry`,
       });
     }
+    if (outbox.deadLettered > 0) {
+      alerts.push({
+        code: 'OUTBOX_DLQ',
+        severity: 'critical',
+        message: `${outbox.deadLettered} event(s) in dead-letter queue`,
+      });
+    }
     if (workerAgeSeconds === null || workerAgeSeconds > 15) {
       alerts.push({
         code: 'WORKER_DOWN',
@@ -98,6 +109,7 @@ export function systemRoutes(deps: AppDeps): Hono<AppEnv> {
         attempts: row.attempts,
         occurredAt: row.occurredAt.toISOString(),
         processedAt: row.processedAt?.toISOString() ?? null,
+        deadLetteredAt: row.deadLetteredAt?.toISOString() ?? null,
         lastError: row.lastError,
       })),
       realtimeSubscribers,
@@ -110,6 +122,11 @@ export function systemRoutes(deps: AppDeps): Hono<AppEnv> {
     };
 
     return sendData(c, health);
+  });
+
+  router.post('/outbox/replay', requireCapability('system.read'), async (c) => {
+    const replayed = await replayDeadLetters(deps.db);
+    return sendData(c, { replayed });
   });
 
   return router;

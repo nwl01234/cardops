@@ -18,7 +18,7 @@ const sql = postgres(config.DATABASE_URL, { max: 2, onnotice: () => undefined })
 const redis = new Redis(config.REDIS_URL, { maxRetriesPerRequest: 2 });
 
 let nats: NatsConnection | null = null;
-let natsHealthy = false;
+let connecting = false;
 let stopped = false;
 let running = false;
 let timer: NodeJS.Timeout | null = null;
@@ -40,7 +40,7 @@ function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise
 }
 
 async function publish(event: unknown): Promise<void> {
-  if (!nats || nats.isClosed() || !natsHealthy) throw new Error('NATS is not connected');
+  if (!nats || nats.isClosed()) throw new Error('NATS is not connected');
   nats.publish('cardops.events', new TextEncoder().encode(JSON.stringify(event)));
   // Core NATS flush confirms the server received the frame, not that a
   // subscriber processed it. Do not let a hung socket block the worker.
@@ -94,6 +94,7 @@ async function dispatch(): Promise<number> {
       } catch (error) {
         await markFailed(row.id, error, row.attempts);
         logger.warn({ err: error, eventId: row.id }, 'Outbox event failed; retry scheduled');
+        if (!nats || nats.isClosed()) void connectNats();
       }
     }
   } catch (error) {
@@ -105,6 +106,8 @@ async function dispatch(): Promise<number> {
 }
 
 async function connectNats(): Promise<void> {
+  if (connecting) return;
+  connecting = true;
   try {
     nats = await connect({
       servers: config.NATS_URL,
@@ -113,23 +116,15 @@ async function connectNats(): Promise<void> {
       maxReconnectAttempts: -1,
       reconnectTimeWait: 1_000,
     });
-    natsHealthy = true;
     await redis.set('cardops:infra:nats', 'up', 'EX', 15);
-    const connection = nats;
-    void (async () => {
-      for await (const status of connection.status()) {
-        natsHealthy = status.type === 'reconnect' || status.type === 'update';
-        await redis
-          .set('cardops:infra:nats', natsHealthy ? 'up' : 'down', 'EX', 15)
-          .catch(() => undefined);
-      }
-    })();
     logger.info({ nats: config.NATS_URL }, 'Outbox worker connected to NATS');
   } catch (error) {
-    natsHealthy = false;
+    nats = null;
     await redis.set('cardops:infra:nats', 'down', 'EX', 15).catch(() => undefined);
     logger.error({ err: error }, 'NATS unavailable; retrying');
     setTimeout(() => void connectNats(), 2_000);
+  } finally {
+    connecting = false;
   }
 }
 
@@ -140,10 +135,11 @@ await wakeSub.subscribe('cardops.outbox.wake');
 wakeSub.on('message', () => void dispatch());
 
 timer = setInterval(() => {
+  if (!nats || nats.isClosed()) void connectNats();
   void redis
     .multi()
     .set('cardops:worker:heartbeat', new Date().toISOString(), 'EX', 15)
-    .set('cardops:infra:nats', natsHealthy ? 'up' : 'down', 'EX', 15)
+    .set('cardops:infra:nats', nats && !nats.isClosed() ? 'up' : 'down', 'EX', 15)
     .exec()
     .catch(() => undefined);
   void dispatch();

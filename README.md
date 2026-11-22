@@ -435,8 +435,8 @@ ticket; cross-origin POST → 403; backup/restore; k6 smoke без ошибок
 - **Один PostgreSQL.** В production — отдельная БД/схема и права на сервис.
 - **Redis/NATS локальные binaries**, не кластер. JetStream уже даёт durable
   stream, ack и DLQ; production — 3-node NATS и managed Redis.
-- **Документы**: локальный runner использует S3-совместимый `s3rver`, код
-  работает через MinIO client; production — MinIO/S3 с versioning и KMS.
+- **Документы**: локальный runner использует S3-совместимый `s3rver`, сервис
+  работает через S3 API (AWS SDK); production — MinIO/S3 с versioning и KMS.
 - **Refresh/access в cookie**, без OIDC/SSO; для enterprise — OIDC, key rotation,
   session version.
 - **Rate limit фиксированное окно в Redis**, не sliding-window cluster.

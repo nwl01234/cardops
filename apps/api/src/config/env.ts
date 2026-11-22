@@ -39,7 +39,7 @@ const envSchema = z.object({
   DOCUMENTS_INTERNAL_TOKEN: z
     .string()
     .min(32)
-    .default('dev-only-documents-internal-token-change-me-please'),
+    .default('change-me-documents-internal-token-please-32'),
   WEB_ORIGIN: z.url().default('http://localhost:5173'),
   COOKIE_SECURE: booleanFromString.default(false),
   ALLOW_INSECURE_COOKIE: booleanFromString.default(false),

@@ -18,7 +18,7 @@ import { startObjectStore } from './lib/object-store.mjs';
 loadRootEnv();
 
 const DEV_SECRET = randomBytes(32).toString('base64url');
-const DEV_DOCUMENTS_TOKEN = 'dev-only-documents-internal-token-change-me-please';
+const DEV_DOCUMENTS_TOKEN = 'change-me-documents-internal-token-please-32';
 const databaseUrl =
   process.env.DATABASE_URL ?? 'postgres://cardops:cardops@localhost:55432/cardops';
 const apiPort = Number(process.env.PORT ?? 8787);

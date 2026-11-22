@@ -35,6 +35,7 @@
     "db:backup": "node scripts/backup.mjs",
     "db:restore": "node scripts/restore.mjs",
     "load:test": "node scripts/load-test.mjs",
+    "load:k6": ".data/obs/k6/k6-v2.4.0-windows-amd64/k6.exe run observability/k6.js",
     "db:local": "node scripts/db.mjs",
     "db:migrate": "npm run db:migrate --workspace @cardops/api",
     "db:seed": "npm run db:seed --workspace @cardops/api",

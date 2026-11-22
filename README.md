@@ -43,8 +43,8 @@ documents и outbox-consumer вынесены. Как дробить дальш�
 - вручную: refresh после удаления access-cookie, параллельный refresh, отзыв
   сессий, одноразовый WS ticket, cross-origin POST → 403, OCR по реальному PNG
   (`CRD-DEMO-01`, confidence 92%), OCR quota, **JetStream end-to-end**,
-  DLQ/replay, PDF-акт с записью в S3, backup/restore, autocannon smoke без
-  non-2xx (порядка 300–400 rps на текущей dev-машине);
+  DLQ/replay, PDF-акт с записью в S3, backup/restore, k6 25 VU / 50 с:
+  9595 запросов, 0 ошибок, p95 18.9 ms, p99 < 500 ms;
 - Docker не входит в текущий этап: compose-файл **не обновлён** под сервисный
   контур. Проверенный запуск — `start-demo.bat`.
 
@@ -254,6 +254,18 @@ COMMIT;
 Durable consumer `notifications` общий для нескольких инстансов: каждый
 забирает свою пачку, ack общий.
 
+### Observability / SLO
+
+- core API отдаёт `/metrics` в Prometheus-формате;
+- метрики: request rate, p95/p99, 4xx/5xx, outbox pending/DLQ/lag, WS
+  connections, worker heartbeat, NATS up;
+- `observability/prometheus.yml` — scrape каждые 5 секунд;
+- `observability/grafana/dashboards/cardops.json` — готовый dashboard;
+- `observability/k6.js` — нагрузочный сценарий с порогами
+  `5xx < 1%`, `p95 < 200 ms`, `p99 < 500 ms`; проверено 25 VU / 50 с,
+  9595 запросов, 0 ошибок, p95 18.9 ms;
+- локальный запуск Grafana/Prometheus/k6 описан в `observability/README.md`.
+
 ## 8. OCR / mobile scanner
 
 - ручной ввод SKU;
@@ -411,7 +423,8 @@ Scan           Tests 4 passed
 
 Дополнительно вручную: два WS-инстанса получили одно событие; OCR вернул
 `CRD-DEMO-01` с confidence 92%; rate limit: 10×401 → 11×429; single-use WS
-ticket; cross-origin POST → 403; backup/restore; autocannon smoke без ошибок.
+ticket; cross-origin POST → 403; backup/restore; k6 smoke без ошибок
+(p95 18.9 ms).
 
 ## 13. Trade-offs / roadmap
 
@@ -431,7 +444,7 @@ ticket; cross-origin POST → 403; backup/restore; autocannon smoke без ош�
 - **Alerts вычисляются в `/api/system`**, без PagerDuty/Alertmanager.
 - **Tracing — correlation spans в Redis**, не OpenTelemetry/Jaeger.
 - **Backup — JSON snapshot** бизнес-таблиц, не PITR/WAL.
-- **Load test — autocannon smoke**, не capacity planning.
+- **Load test — k6/autocannon smoke**, не capacity planning.
 - **Audit trigger ≠ WORM**: нет защиты от `TRUNCATE`/superuser.
 - **Docker** не обновлён под сервисный контур.
 - **In-memory / Redis** session keys требуют TTL purge для старых family.
@@ -465,6 +478,7 @@ NAPI/worker-совместимости. В CI сейчас Node 22.
 │  └─ outbox-worker/           outbox → JetStream + DLQ
 ├─ packages/shared/            Zod contracts, state machine, permissions
 ├─ demo-codes/                 real/fake QR + Code 128 + README (not served)
+├─ observability/              Prometheus, Grafana dashboard, k6 scenario
 ├─ .assets/screens/            screenshots for portfolio/README
 ├─ scripts/                    dev/infra/test/backup/restore/load/stop/watchdog
 ├─ .data/bin/                  локальные Redis/NATS binaries (gitignored)

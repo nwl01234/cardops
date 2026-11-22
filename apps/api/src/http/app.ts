@@ -22,6 +22,7 @@ import { CardsService } from '../modules/cards/cards.service';
 import { AuditService } from '../modules/audit/audit.service';
 import { DashboardService } from '../modules/dashboard/dashboard.service';
 import { UsersService } from '../modules/users/users.service';
+import { metricsResponse } from './observability/metrics';
 
 const PUBLIC_API_PATHS = new Set([
   '/api/auth/login',
@@ -97,6 +98,10 @@ export function createApp(deps: AppDeps): Hono<AppEnv> {
   app.route('/api/scan', scanRoutes(deps, cardsService));
   app.route('/api', directoryRoutes(deps));
   app.route('/api/system', systemRoutes(deps));
+
+  // Local Prometheus scrape target. In production keep it on the private
+  // network or put it behind the ingress allowlist.
+  app.get('/metrics', (c) => metricsResponse(deps, c));
 
   app.notFound((c) => {
     return c.json(

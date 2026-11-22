@@ -2,6 +2,7 @@ import { requestId as newRequestId } from '../../lib/ids';
 import type { AppLogger } from '../../lib/logger';
 import type { RedisClient } from '../../lib/redis';
 import type { AppMiddleware, Principal } from '../context';
+import { observeRequest } from '../observability/metrics';
 
 const REQUEST_ID_PATTERN = /^[A-Za-z0-9._-]{8,64}$/;
 
@@ -32,6 +33,8 @@ export function requestContextMiddleware(logger: AppLogger, redis: RedisClient):
       } else {
         logger.info(entry, 'http.request');
       }
+
+      void observeRequest(c, entry.durationMs);
 
       void redis
         .multi()

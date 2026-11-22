@@ -1,0 +1,11 @@
+apiVersion: 1
+
+providers:
+  - name: CardOps
+    orgId: 1
+    folder: CardOps
+    type: file
+    disableDeletion: false
+    updateIntervalSeconds: 10
+    options:
+      path: C:/Users/SWAG/Documents/rabPROMO/observability/grafana/dashboards

@@ -41,8 +41,8 @@ outbox-consumer вынесены. Как дробить дальше — опи�
 - вручную: refresh после удаления access-cookie, отзыв сессий, два WS-инстанса
   с Redis fanout, одноразовый WS ticket, cross-origin POST → 403, OCR по
   реальному PNG (`CRD-DEMO-01`, confidence 92%), OCR quota, outbox-worker →
-  NATS → notifications, backup/restore, autocannon ~770 rps, p99 ~17 ms на
-  `/api/cards` (локально);
+  NATS → notifications, backup/restore, autocannon smoke без non-2xx
+  (порядка 300–400 rps на текущей dev-машине);
 - Docker не входит в текущий этап: compose-файл **не обновлён** под сервисный
   контур. Проверенный запуск — `start-demo.bat`.
 
@@ -393,7 +393,7 @@ Scan           Tests 4 passed
 
 Дополнительно вручную: два WS-инстанса получили одно событие; OCR вернул
 `CRD-DEMO-01` с confidence 92%; rate limit: 10×401 → 11×429; single-use WS
-ticket; cross-origin POST → 403; backup/restore; autocannon ~772 rps, p99 ~17 ms.
+ticket; cross-origin POST → 403; backup/restore; autocannon smoke без ошибок.
 
 ## 13. Trade-offs / roadmap
 

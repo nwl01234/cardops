@@ -8,10 +8,29 @@ const familyTombstoneKey = (familyId: string) => `cardops:family:revoked:${famil
 /** Tombstones outlive a rotation/revocation race, then are garbage-collected. */
 const TOMBSTONE_TTL_SECONDS = 300;
 
-interface SessionValue {
-  userId: string;
-  createdAt: string;
-}
+/**
+ * Session value is `userId|createdAtMs`. The check is one Lua round trip:
+ * session exists, neither family nor user tombstone is newer than the session.
+ * A tombstone that is newer means a refresh raced an admin revoke; the session
+ * is deleted instead of resurrecting access.
+ */
+const IS_ACTIVE_SCRIPT = `
+  local raw = redis.call('GET', KEYS[1])
+  if not raw then return 0 end
+  local sep = string.find(raw, '|', 1, true)
+  if not sep then redis.call('DEL', KEYS[1]); return 0 end
+  local userId = string.sub(raw, 1, sep - 1)
+  local created = tonumber(string.sub(raw, sep + 1))
+  if not userId or not created then redis.call('DEL', KEYS[1]); return 0 end
+  local familyRevoked = redis.call('GET', KEYS[2])
+  local userRevoked = redis.call('GET', KEYS[3] .. userId)
+  if (familyRevoked and tonumber(familyRevoked) >= created) or
+     (userRevoked and tonumber(userRevoked) >= created) then
+    redis.call('DEL', KEYS[1])
+    return 0
+  end
+  return 1
+`;
 
 export class SessionStore {
   constructor(private readonly redis: RedisClient) {}
@@ -22,47 +41,22 @@ export class SessionStore {
     ttlSeconds: number,
     createdAt: Date = new Date(),
   ): Promise<void> {
-    const value: SessionValue = { userId, createdAt: createdAt.toISOString() };
     await this.redis
       .multi()
-      .set(sessionKey(familyId), JSON.stringify(value), 'EX', ttlSeconds)
+      .set(sessionKey(familyId), `${userId}|${createdAt.getTime()}`, 'EX', ttlSeconds)
       .sadd(userSessionsKey(userId), familyId)
       .exec();
   }
 
   async isActive(familyId: string): Promise<boolean> {
-    const raw = await this.redis.get(sessionKey(familyId));
-    if (!raw) return false;
-
-    let value: SessionValue;
-    try {
-      value = JSON.parse(raw) as SessionValue;
-    } catch {
-      await this.redis.del(sessionKey(familyId));
-      return false;
-    }
-    if (typeof value.userId !== 'string' || typeof value.createdAt !== 'string') {
-      await this.redis.del(sessionKey(familyId));
-      return false;
-    }
-
-    const [familyRevoked, userRevoked] = await Promise.all([
-      this.redis.get(familyTombstoneKey(familyId)),
-      this.redis.get(userTombstoneKey(value.userId)),
-    ]);
-    const created = Date.parse(value.createdAt);
-    if (!Number.isFinite(created)) {
-      await this.redis.del(sessionKey(familyId));
-      return false;
-    }
-    const revoked =
-      (familyRevoked !== null && Number(familyRevoked) >= created) ||
-      (userRevoked !== null && Number(userRevoked) >= created);
-    if (revoked) {
-      await this.redis.del(sessionKey(familyId));
-      return false;
-    }
-    return true;
+    const active = (await this.redis.eval(
+      IS_ACTIVE_SCRIPT,
+      3,
+      sessionKey(familyId),
+      familyTombstoneKey(familyId),
+      'cardops:user:revoked:',
+    )) as number;
+    return active === 1;
   }
 
   async touch(familyId: string, ttlSeconds: number): Promise<void> {

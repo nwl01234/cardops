@@ -451,7 +451,7 @@ NAPI/worker-совместимости. В CI сейчас Node 22.
 └─ README.md
 ```
 
-## 16. Five files to open
+## 16. Key files
 
 1. `apps/api/src/modules/auth/auth.service.ts` — login, refresh rotation, reuse
    detection, session revocation.
@@ -464,14 +464,3 @@ NAPI/worker-совместимости. В CI сейчас Node 22.
 
 Бонус: `services/scan/src/ocr.ts` — OCR + SKU extraction without business logic.
 
-## 17. 60-second pitch
-
-> CardOps — demo-продукт внутреннего учёта карт: React, core Hono API, отдельные
-> notifications/OCR/outbox-worker, PostgreSQL, Redis и NATS. Критичные изменения
-> идут в транзакции: row lock, state machine, append-only audit и outbox. Outbox
-> worker публикует событие в NATS, notifications раздают его через Redis Pub/Sub
-> всем инстансам, а клиент перезапрашивает REST. Access JWT короткий, refresh
-> ротируется с reuse detection, сессии отзываются через Redis. Admin CRUD,
-> реальный OCR через Tesseract и system-экран с alerts/traces показывают, что это
-> не только CRUD. Ограничения — один PostgreSQL, Tesseract вместо ML, JSON
-> backup и отсутствие Docker — честно описаны в README.
